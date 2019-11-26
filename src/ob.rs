@@ -85,7 +85,7 @@ impl OrderBook {
     }
 
     fn get_idx(&self, price: f64) -> Result<usize> {
-        let p_idx = (price * 100.0) as usize;
+        let p_idx = (price * 100.0).round() as usize;
         if p_idx >= self.book.len() {
             Err(Error::Range)
         } else {
@@ -101,7 +101,7 @@ impl OrderBook {
             Side::Sell if p_idx < self.ask => self.ask = p_idx,
             _ => (),
         }
-        assert!(self.bid < self.ask, "bid >= ask on {}", rec.id);
+        assert!(self.bid < self.ask, "bid >= ask ({} >= {}) on {}", self.bid, self.ask, rec.id);
         self.book[p_idx].push_back((rec.size, rec.id));
         Ok(())
     }
@@ -113,9 +113,12 @@ impl OrderBook {
         if self.book[p_idx].is_empty() || id != self.book[p_idx][0].1 {
             return Err(Error::MatchUuid);
         }
-        let mut sz = self.book[p_idx][0].0;
-        sz -= size;
-        if relative_eq!(sz, 0.0) {
+        let sz_round = {
+            let sz = &mut self.book[p_idx][0].0;
+            *sz -= size;
+            (*sz * 100.0).round()
+        };
+        if sz_round == 0.0 {
             self.book[p_idx].pop_front();
             self.check_ask_bid(p_idx);
         }
@@ -165,6 +168,11 @@ impl OrderBook {
         Self::open(self, side, BookRecord{price, size:0.001, id: Uuid::nil()})
     }
 
+    /// done test order
+    pub fn done_test(&mut self, price: f64) -> Result<()> {
+        Self::done(self, price, Uuid::nil())
+    }
+
     /// test is test order works
     pub fn test_order(&mut self, side: Side, price: f64) -> Result<()> {
         let bid_or_ask = match side {
@@ -187,8 +195,11 @@ impl fmt::Display for OrderBook {
             return write!(f, "OB: empty");
         }
         let size = 20;
-        let bids = self.bids(size).into_iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
-        let asks = self.asks(size).into_iter().map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+
+        let round_lambda = |x: f64| (x*1000.0).round()/1000.0;
+
+        let bids = self.bids(size).into_iter().map(round_lambda).map(|x| x.to_string()).collect::<Vec<_>>().join(",");
+        let asks = self.asks(size).into_iter().map(round_lambda).map(|x| x.to_string()).collect::<Vec<_>>().join(",");
         let bid = self.bid as f64 / 100.0;
         let ask = self.ask as f64 / 100.0;
         write!(f, "OB: {} | {:.2}   {:.2} | {}", bids, bid, ask, asks)
@@ -282,10 +293,14 @@ mod tests {
                 id: Uuid::new_v4(),
             },
         ).unwrap_or_default();
-        ob._match(3995.0, 0.5, id2).unwrap_or_default();
+        ob._match(3995.0, 0.3, id2).unwrap_or_default();
+        let str = format!("{}", ob);
+        assert_eq!(str, "OB: 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.5,0,0,0,0.2 | 3995.00   4005.00 | 0.4,0,0.2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
 
+        ob._match(3995.0, 0.2, id2).unwrap_or_default();
         let str = format!("{}", ob);
         assert_eq!(str, "OB: 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.5 | 3994.96   4005.00 | 0.4,0,0.2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+
     }
 
     #[test]
@@ -325,4 +340,29 @@ mod tests {
         let str = format!("{}", ob);
         assert_eq!(str, "OB: 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.5 | 3995.00   4005.00 | 0.4,0,0.2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
     }
+
+    #[test]
+    fn test_round_output() {
+        let mut ob = OrderBook::new();
+        ob.reload(
+            vec![
+                BookRecord {
+                    price: 3995.0,
+                    size: 0.3,
+                    id: Uuid::new_v4(),
+                }
+            ],
+            vec![
+                BookRecord {
+                    price: 4005.0,
+                    size: 1.0 / 3.0,
+                    id: Uuid::new_v4(),
+                },
+            ],
+        ).unwrap_or_default();
+
+        let str = format!("{}", ob);
+        assert_eq!(str, "OB: 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0.3 | 3995.00   4005.00 | 0.333,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0");
+    }
+
 }
